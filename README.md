@@ -2,6 +2,13 @@
 
 ## Setup
 
+You need to install:
+
+```shell
+brew install ffmpeg
+brew install sdl2
+```
+
 ```shell
 cd build
 cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ..
