@@ -1,337 +1,101 @@
+#include <SDL2/SDL.h>
+#include <assert.h>
 #include <libavcodec/avcodec.h>
 #include <libavdevice/avdevice.h>
 #include <libavformat/avformat.h>
-#include <libswresample/swresample.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
-#include <time.h>
+#include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
+
+#define WIDTH 640
+#define HEIGHT 480
+#define FPS 30
 
 int main() {
-  int ret;
-  AVFormatContext *fmt_ctx = NULL;
-  AVPacket *pkt = NULL;
-  AVFrame *frame = NULL;
-  SwrContext *swr_ctx = NULL;
-  const char *device_name = ":0";
-  const int RECORD_SECONDS = 5;
-  time_t start_time, current_time;
-  int total_bytes = 0;
-
-  // Register all devices
   avdevice_register_all();
 
-  // Allocate format context
-  fmt_ctx = avformat_alloc_context();
-  if (!fmt_ctx) {
-    fprintf(stderr, "Could not allocate format context\n");
-    return 1;
-  }
-
-  // Allocate packet
-  pkt = av_packet_alloc();
-  if (!pkt) {
-    fprintf(stderr, "Could not allocate packet\n");
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Allocate frame
-  frame = av_frame_alloc();
-  if (!frame) {
-    fprintf(stderr, "Could not allocate frame\n");
-    av_packet_free(&pkt);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Open input device
+  AVFormatContext *input_ctx = NULL;
+  const AVInputFormat *input_fmt = av_find_input_format("avfoundation");
   AVDictionary *options = NULL;
-  av_dict_set(&options, "channels", "1",
-              0); // Set to mono since that's what we're getting
+  av_dict_set(&options, "framerate", "30", 0);
+  av_dict_set(&options, "video_size", "640x480", 0);
+  av_dict_set(&options, "pixel_format", "uyvy422", 0);
+  assert(avformat_open_input(&input_ctx, "0", input_fmt, &options) == 0);
+  assert(avformat_find_stream_info(input_ctx, NULL) >= 0);
+  int video_stream_index =
+      av_find_best_stream(input_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+  AVStream *in_stream = input_ctx->streams[video_stream_index];
+  AVCodecParameters *in_params = in_stream->codecpar;
 
-  const AVInputFormat *input_format = av_find_input_format("avfoundation");
-  if (!input_format) {
-    fprintf(stderr, "Could not find avfoundation input format\n");
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
+  const AVCodec *decoder = avcodec_find_decoder(in_params->codec_id);
+  AVCodecContext *dec_ctx = avcodec_alloc_context3(decoder);
+  avcodec_parameters_to_context(dec_ctx, in_params);
+  avcodec_open2(dec_ctx, decoder, NULL);
 
-  ret = avformat_open_input(&fmt_ctx, device_name, input_format, &options);
-  if (ret < 0) {
-    char errbuf[AV_ERROR_MAX_STRING_SIZE];
-    av_strerror(ret, errbuf, sizeof(errbuf));
-    fprintf(stderr, "Could not open input device: %s\n", errbuf);
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
+  struct SwsContext *sws =
+      sws_getContext(WIDTH, HEIGHT, dec_ctx->pix_fmt, WIDTH, HEIGHT,
+                     AV_PIX_FMT_UYVY422, SWS_BILINEAR, NULL, NULL, NULL);
 
-  // Get stream information
-  ret = avformat_find_stream_info(fmt_ctx, NULL);
-  if (ret < 0) {
-    fprintf(stderr, "Could not find stream information\n");
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
+  assert(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) == 0);
+  SDL_Window *window =
+      SDL_CreateWindow("Live Camera", SDL_WINDOWPOS_CENTERED,
+                       SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, SDL_WINDOW_SHOWN);
+  SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, 0);
+  SDL_Texture *texture =
+      SDL_CreateTexture(renderer, SDL_PIXELFORMAT_UYVY,
+                        SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT);
 
-  // Find audio stream
-  int audio_stream_index = -1;
-  for (unsigned int i = 0; i < fmt_ctx->nb_streams; i++) {
-    if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-      audio_stream_index = i;
-      break;
-    }
-  }
+  AVPacket *pkt = av_packet_alloc();
+  AVFrame *frame = av_frame_alloc();
+  AVFrame *rgb_frame = av_frame_alloc();
+  int rgb_bufsize =
+      av_image_get_buffer_size(AV_PIX_FMT_UYVY422, WIDTH, HEIGHT, 1);
+  uint8_t *rgb_buf = (uint8_t *)av_malloc(rgb_bufsize);
+  av_image_fill_arrays(rgb_frame->data, rgb_frame->linesize, rgb_buf,
+                       AV_PIX_FMT_UYVY422, WIDTH, HEIGHT, 1);
 
-  if (audio_stream_index == -1) {
-    fprintf(stderr, "Could not find audio stream\n");
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Get codec parameters
-  AVCodecParameters *codec_params =
-      fmt_ctx->streams[audio_stream_index]->codecpar;
-  const AVCodec *codec = avcodec_find_decoder(codec_params->codec_id);
-  if (!codec) {
-    fprintf(stderr, "Could not find codec\n");
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Allocate codec context
-  AVCodecContext *codec_ctx = avcodec_alloc_context3(codec);
-  if (!codec_ctx) {
-    fprintf(stderr, "Could not allocate codec context\n");
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Copy codec parameters to codec context
-  ret = avcodec_parameters_to_context(codec_ctx, codec_params);
-  if (ret < 0) {
-    fprintf(stderr, "Could not copy codec parameters\n");
-    avcodec_free_context(&codec_ctx);
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Open codec
-  ret = avcodec_open2(codec_ctx, codec, NULL);
-  if (ret < 0) {
-    fprintf(stderr, "Could not open codec\n");
-    avcodec_free_context(&codec_ctx);
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Set up resampler
-  swr_ctx = swr_alloc();
-  if (!swr_ctx) {
-    fprintf(stderr, "Could not allocate resampler context\n");
-    avcodec_free_context(&codec_ctx);
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Configure resampler with proper channel layouts
-  AVChannelLayout in_ch_layout = {0};
-  AVChannelLayout out_ch_layout = {0};
-
-  // Get input channel layout from codec context
-  av_channel_layout_copy(&in_ch_layout, &codec_ctx->ch_layout);
-
-  // Set output channel layout to mono
-  av_channel_layout_default(&out_ch_layout, 1);
-
-  // Configure resampler with proper channel layouts
-  ret = swr_alloc_set_opts2(&swr_ctx, &out_ch_layout, AV_SAMPLE_FMT_S16, 48000,
-                            &in_ch_layout, codec_ctx->sample_fmt,
-                            codec_ctx->sample_rate, 0, NULL);
-  if (ret < 0) {
-    fprintf(stderr, "Could not set resampler options\n");
-    av_channel_layout_uninit(&in_ch_layout);
-    av_channel_layout_uninit(&out_ch_layout);
-    swr_free(&swr_ctx);
-    avcodec_free_context(&codec_ctx);
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  ret = swr_init(swr_ctx);
-  if (ret < 0) {
-    fprintf(stderr, "Could not initialize resampler\n");
-    av_channel_layout_uninit(&in_ch_layout);
-    av_channel_layout_uninit(&out_ch_layout);
-    swr_free(&swr_ctx);
-    avcodec_free_context(&codec_ctx);
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Open output file
-  FILE *output_file = fopen("output.wav", "wb");
-  if (!output_file) {
-    fprintf(stderr, "Could not open output file\n");
-    av_channel_layout_uninit(&in_ch_layout);
-    av_channel_layout_uninit(&out_ch_layout);
-    swr_free(&swr_ctx);
-    avcodec_free_context(&codec_ctx);
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avformat_close_input(&fmt_ctx);
-    avformat_free_context(fmt_ctx);
-    return 1;
-  }
-
-  // Write WAV header
-  uint8_t header[44] = {0};
-  memcpy(header, "RIFF", 4);
-  memcpy(header + 8, "WAVE", 4);
-  memcpy(header + 12, "fmt ", 4);
-  *(uint32_t *)(header + 16) = 16;        // fmt chunk size
-  *(uint16_t *)(header + 20) = 1;         // PCM format
-  *(uint16_t *)(header + 22) = 1;         // mono
-  *(uint32_t *)(header + 24) = 48000;     // sample rate
-  *(uint32_t *)(header + 28) = 48000 * 2; // byte rate
-  *(uint16_t *)(header + 32) = 2;         // block align
-  *(uint16_t *)(header + 34) = 16;        // bits per sample
-  memcpy(header + 36, "data", 4);
-  fwrite(header, 1, 44, output_file);
-
-  printf("Recording for %d seconds...\n", RECORD_SECONDS);
-  start_time = time(NULL);
-
-  // Allocate buffer for converted samples
-  uint8_t *converted_data = NULL;
-  int converted_linesize;
-  int max_samples = 0;
-
-  // Read frames for 5 seconds
-  int frame_count = 0;
+  // === Main loop ===
+  SDL_Event event;
   while (1) {
-    current_time = time(NULL);
-    if (difftime(current_time, start_time) >= RECORD_SECONDS) {
-      printf("\nRecording complete!\n");
-      break;
+    while (SDL_PollEvent(&event)) {
+      if (event.type == SDL_QUIT)
+        goto quit;
     }
 
-    ret = av_read_frame(fmt_ctx, pkt);
-    if (ret < 0) {
-      if (ret == AVERROR(EAGAIN)) {
-        continue;
-      }
-      char errbuf[AV_ERROR_MAX_STRING_SIZE];
-      av_strerror(ret, errbuf, sizeof(errbuf));
-      fprintf(stderr, "Error reading frame: %s\n", errbuf);
-      break;
+    if (av_read_frame(input_ctx, pkt) < 0) {
+      av_packet_unref(pkt);
+      continue;
+    }
+    if (pkt->stream_index != video_stream_index) {
+      av_packet_unref(pkt);
+      continue;
     }
 
-    if (pkt->stream_index == audio_stream_index) {
-      ret = avcodec_send_packet(codec_ctx, pkt);
-      if (ret < 0) {
-        fprintf(stderr, "Error sending packet to decoder\n");
-        break;
-      }
+    avcodec_send_packet(dec_ctx, pkt);
+    if (avcodec_receive_frame(dec_ctx, frame) == 0) {
+      sws_scale(sws, (const uint8_t *const *)frame->data, frame->linesize, 0,
+                HEIGHT, rgb_frame->data, rgb_frame->linesize);
 
-      while (ret >= 0) {
-        ret = avcodec_receive_frame(codec_ctx, frame);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-          break;
-        } else if (ret < 0) {
-          fprintf(stderr, "Error receiving frame from decoder\n");
-          break;
-        }
-
-        // Calculate number of output samples
-        int out_samples = av_rescale_rnd(
-            swr_get_delay(swr_ctx, frame->sample_rate) + frame->nb_samples,
-            48000, frame->sample_rate, AV_ROUND_UP);
-
-        // Allocate or reallocate buffer if needed
-        if (out_samples > max_samples) {
-          av_freep(&converted_data);
-          ret = av_samples_alloc(&converted_data, &converted_linesize, 1,
-                                 out_samples, AV_SAMPLE_FMT_S16, 0);
-          if (ret < 0) {
-            fprintf(stderr, "Could not allocate samples\n");
-            break;
-          }
-          max_samples = out_samples;
-        }
-
-        // Convert samples
-        ret = swr_convert(swr_ctx, &converted_data, out_samples,
-                          (const uint8_t **)frame->data, frame->nb_samples);
-        if (ret < 0) {
-          fprintf(stderr, "Error converting samples\n");
-          break;
-        }
-
-        // Write converted samples to file
-        fwrite(converted_data, 1, ret * 2, output_file);
-        total_bytes += ret * 2;
-
-        printf("\rRecording: %d seconds remaining...",
-               RECORD_SECONDS - (int)difftime(current_time, start_time));
-        fflush(stdout);
-        frame_count++;
-      }
+      SDL_UpdateTexture(texture, NULL, rgb_frame->data[0],
+                        rgb_frame->linesize[0]);
+      SDL_RenderClear(renderer);
+      SDL_RenderCopy(renderer, texture, NULL, NULL);
+      SDL_RenderPresent(renderer);
     }
-
     av_packet_unref(pkt);
+    // SDL_Delay(1000 / FPS);
   }
 
-  // Update WAV header with correct file size
-  fseek(output_file, 4, SEEK_SET);
-  uint32_t file_size = total_bytes + 36;
-  fwrite(&file_size, 1, 4, output_file);
-  fseek(output_file, 40, SEEK_SET);
-  fwrite(&total_bytes, 1, 4, output_file);
-
-  // Cleanup
-  av_freep(&converted_data);
-  av_channel_layout_uninit(&in_ch_layout);
-  av_channel_layout_uninit(&out_ch_layout);
-  swr_free(&swr_ctx);
-  avcodec_free_context(&codec_ctx);
+quit:
+  av_free(rgb_buf);
   av_frame_free(&frame);
+  av_frame_free(&rgb_frame);
   av_packet_free(&pkt);
-  avformat_close_input(&fmt_ctx);
-  avformat_free_context(fmt_ctx);
-  fclose(output_file);
-
-  printf("\nRecorded %d frames to output.wav\n", frame_count);
+  sws_freeContext(sws);
+  avcodec_free_context(&dec_ctx);
+  avformat_close_input(&input_ctx);
+  SDL_DestroyTexture(texture);
+  SDL_DestroyRenderer(renderer);
+  SDL_DestroyWindow(window);
+  SDL_Quit();
   return 0;
 }

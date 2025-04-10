@@ -13,4 +13,6 @@ target_link_libraries(ffmpeg_example PRIVATE
   avcodec
   avutil
   swresample
+  swscale
+  sdl2
 )
