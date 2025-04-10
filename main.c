@@ -99,9 +99,6 @@ void *capture_thread(void *arg) {
   struct SwsContext *to_yuv =
       sws_getContext(WIDTH, HEIGHT, in_params->format, WIDTH, HEIGHT,
                      AV_PIX_FMT_YUV420P, SWS_BILINEAR, NULL, NULL, NULL);
-  struct SwsContext *to_rgb =
-      sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUV420P, WIDTH, HEIGHT,
-                     AV_PIX_FMT_RGB24, SWS_BILINEAR, NULL, NULL, NULL);
 
   AVPacket *pkt = av_packet_alloc();
   AVFrame *cam = av_frame_alloc();
@@ -152,7 +149,6 @@ void *capture_thread(void *arg) {
   av_frame_free(&rgb);
   av_packet_free(&pkt);
   sws_freeContext(to_yuv);
-  sws_freeContext(to_rgb);
   avcodec_free_context(&raw_dec_ctx);
   avcodec_free_context(&enc_ctx);
   // avcodec_free_context(&dec_ctx);
