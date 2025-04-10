@@ -151,7 +151,6 @@ void *capture_thread(void *arg) {
   sws_freeContext(to_yuv);
   avcodec_free_context(&raw_dec_ctx);
   avcodec_free_context(&enc_ctx);
-  // avcodec_free_context(&dec_ctx);
   avformat_close_input(&input_ctx);
   return NULL;
 }
@@ -174,9 +173,9 @@ int main() {
   SDL_Window *win =
       SDL_CreateWindow("AV1 Live Loopback", SDL_WINDOWPOS_CENTERED,
                        SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, 0);
-  SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_PRESENTVSYNC);
-  SDL_Texture *tex = SDL_CreateTexture(
-      ren, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT);
+  SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+  SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB24,
+                                       SDL_TEXTUREACCESS_TARGET, WIDTH, HEIGHT);
 
   struct SwsContext *to_rgb =
       sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUV420P, WIDTH, HEIGHT,
