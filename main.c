@@ -37,7 +37,7 @@ int main() {
   avcodec_open2(raw_dec_ctx, raw_decoder, NULL);
 
   // === AV1 encoder ===
-  const AVCodec *enc = avcodec_find_encoder_by_name("libaom-av1");
+  const AVCodec *enc = avcodec_find_encoder_by_name("libsvtav1");
   AVCodecContext *enc_ctx = avcodec_alloc_context3(enc);
   enc_ctx->width = WIDTH;
   enc_ctx->height = HEIGHT;
