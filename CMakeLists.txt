@@ -1,13 +1,11 @@
 cmake_minimum_required(VERSION 3.10)
-project(ffmpeg_example C)
+project(capture_av1 C)
 
-add_executable(ffmpeg_example main.c)
+add_executable(capture_av1 main.c)
 
-# Force Homebrew paths (Apple Silicon)
-target_include_directories(ffmpeg_example PRIVATE /opt/homebrew/include)
-target_link_directories(ffmpeg_example PRIVATE /opt/homebrew/lib)
-
-target_link_libraries(ffmpeg_example PRIVATE
+target_include_directories(capture_av1 PRIVATE /opt/homebrew/include)
+target_link_directories(capture_av1 PRIVATE /opt/homebrew/lib)
+target_link_libraries(capture_av1 PRIVATE
   avdevice
   avformat
   avcodec
