@@ -108,17 +108,11 @@ void *capture_thread(void *arg) {
   AVPacket *pkt = av_packet_alloc();
   AVFrame *cam = av_frame_alloc();
   AVFrame *yuv = av_frame_alloc();
-  AVFrame *rgb = av_frame_alloc();
 
   yuv->format = AV_PIX_FMT_YUV420P;
   yuv->width = WIDTH;
   yuv->height = HEIGHT;
   av_frame_get_buffer(yuv, 32);
-
-  rgb->format = AV_PIX_FMT_RGB24;
-  rgb->width = WIDTH;
-  rgb->height = HEIGHT;
-  av_frame_get_buffer(rgb, 32);
 
   int i = 0;
   while (running) {
@@ -151,7 +145,6 @@ void *capture_thread(void *arg) {
 
   av_frame_free(&cam);
   av_frame_free(&yuv);
-  av_frame_free(&rgb);
   av_packet_free(&pkt);
   sws_freeContext(to_yuv);
   avcodec_free_context(&raw_dec_ctx);
