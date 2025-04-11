@@ -90,11 +90,11 @@ void *capture_thread(void *arg) {
   enc_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
   enc_ctx->time_base = (AVRational){1, FPS};
   enc_ctx->framerate = (AVRational){FPS, 1};
-  enc_ctx->thread_count = 4;
   enc_ctx->pkt_timebase = enc_ctx->time_base;
   enc_ctx->gop_size = 1;
   AVDictionary *encoder_opts = NULL;
   av_dict_set(&encoder_opts, "preset", "8", 0);
+  av_dict_set(&encoder_opts, "crf", "40", 0);
   assert(avcodec_open2(enc_ctx, enc, &encoder_opts) == 0);
 
   // === Swscale contexts ===
@@ -190,8 +190,9 @@ int main() {
   av_frame_get_buffer(rgb, 32);
 
   // === AV1 decoder ===
-  const AVCodec *dec = avcodec_find_decoder_by_name("libaom-av1");
+  const AVCodec *dec = avcodec_find_decoder_by_name("libdav1d");
   AVCodecContext *dec_ctx = avcodec_alloc_context3(dec);
+  dec_ctx->gop_size = 1;
   assert(avcodec_open2(dec_ctx, dec, NULL) == 0);
 
   pthread_t thread;
