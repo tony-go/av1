@@ -69,6 +69,7 @@ AVPacket *pop_packet(void) {
   pthread_mutex_unlock(&queue.mutex);
   return packet;
 }
+
 void *capture_thread(void *arg) {
   AVFormatContext *input_ctx = (AVFormatContext *)arg;
   int video_stream_index =
