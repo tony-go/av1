@@ -84,7 +84,7 @@ void *capture_thread(void *arg) {
   avcodec_open2(raw_dec_ctx, raw_decoder, NULL);
 
   // === AV1 encoder ===
-  const AVCodec *enc = avcodec_find_encoder_by_name("libsvtav1");
+  const AVCodec *enc = avcodec_find_encoder_by_name("libx264");
   AVCodecContext *enc_ctx = avcodec_alloc_context3(enc);
   enc_ctx->width = WIDTH;
   enc_ctx->height = HEIGHT;
@@ -94,8 +94,10 @@ void *capture_thread(void *arg) {
   enc_ctx->pkt_timebase = enc_ctx->time_base;
   enc_ctx->gop_size = 1;
   AVDictionary *encoder_opts = NULL;
-  av_dict_set(&encoder_opts, "preset", "8", 0);
-  av_dict_set(&encoder_opts, "crf", "40", 0);
+  // av_dict_set(&encoder_opts, "preset", "8", 0);
+  // av_dict_set(&encoder_opts, "crf", "40", 0);
+  av_dict_set(&encoder_opts, "preset", "ultrafast", 0);
+  av_dict_set(&encoder_opts, "tune", "zerolatency", 0);
   assert(avcodec_open2(enc_ctx, enc, &encoder_opts) == 0);
 
   // === Swscale contexts ===
@@ -191,7 +193,7 @@ int main() {
   av_frame_get_buffer(rgb, 32);
 
   // === AV1 decoder ===
-  const AVCodec *dec = avcodec_find_decoder_by_name("libdav1d");
+  const AVCodec *dec = avcodec_find_decoder_by_name("h264");
   AVCodecContext *dec_ctx = avcodec_alloc_context3(dec);
   dec_ctx->gop_size = 1;
   assert(avcodec_open2(dec_ctx, dec, NULL) == 0);
