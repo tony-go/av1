@@ -92,8 +92,10 @@ void *capture_thread(void *arg) {
   enc_ctx->framerate = (AVRational){FPS, 1};
   enc_ctx->thread_count = 4;
   enc_ctx->pkt_timebase = enc_ctx->time_base;
-  enc_ctx->gop_size = 1; // Every frame = keyframe
-  assert(avcodec_open2(enc_ctx, enc, NULL) == 0);
+  enc_ctx->gop_size = 1;
+  AVDictionary *encoder_opts = NULL;
+  av_dict_set(&encoder_opts, "preset", "8", 0);
+  assert(avcodec_open2(enc_ctx, enc, &encoder_opts) == 0);
 
   // === Swscale contexts ===
   struct SwsContext *to_yuv =
