@@ -11,8 +11,8 @@
 #include <sys/_pthread/_pthread_mutex_t.h>
 #include <unistd.h>
 
-#define WIDTH 640
-#define HEIGHT 480
+#define WIDTH 1280
+#define HEIGHT 720
 #define FPS 30
 #define FRAME_QUEUE_SIZE 8
 
@@ -166,7 +166,7 @@ int main() {
   const AVInputFormat *input_fmt = av_find_input_format("avfoundation");
   AVDictionary *options = NULL;
   av_dict_set(&options, "framerate", "30", 0);
-  av_dict_set(&options, "video_size", "640x480", 0);
+  av_dict_set(&options, "video_size", "1280x720", 0);
   av_dict_set(&options, "pixel_format", "uyvy422", 0);
   assert(avformat_open_input(&input_ctx, "0", input_fmt, &options) == 0);
   assert(avformat_find_stream_info(input_ctx, NULL) >= 0);
