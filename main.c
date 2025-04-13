@@ -6,6 +6,7 @@
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <sys/_pthread/_pthread_cond_t.h>
 #include <sys/_pthread/_pthread_mutex_t.h>
@@ -16,7 +17,9 @@
 #define FPS 30
 #define FRAME_QUEUE_SIZE 8
 
-volatile int running = 1;
+atomic_int running = 1;
+
+int is_running() { return atomic_load(&running) == 1; }
 
 typedef struct {
   AVPacket *packets[FRAME_QUEUE_SIZE];
@@ -35,10 +38,10 @@ FrameQueue queue = {.head = 0,
 
 void push_packet(AVPacket *packet) {
   pthread_mutex_lock(&queue.mutex);
-  while (queue.count == FRAME_QUEUE_SIZE && running)
+  while (queue.count == FRAME_QUEUE_SIZE && is_running())
     pthread_cond_wait(&queue.cond, &queue.mutex);
 
-  if (!running) {
+  if (!is_running()) {
     pthread_mutex_unlock(&queue.mutex);
     return;
   }
@@ -53,10 +56,10 @@ void push_packet(AVPacket *packet) {
 
 AVPacket *pop_packet(void) {
   pthread_mutex_lock(&queue.mutex);
-  while (queue.count == 0 && running)
+  while (queue.count == 0 && is_running())
     pthread_cond_wait(&queue.cond, &queue.mutex);
 
-  if (!running) {
+  if (!is_running()) {
     pthread_mutex_unlock(&queue.mutex);
     return NULL;
   }
@@ -115,7 +118,7 @@ void *capture_thread(void *arg) {
   av_frame_get_buffer(yuv, 32);
 
   int i = 0;
-  while (running) {
+  while (is_running()) {
     int ret = av_read_frame(input_ctx, pkt);
     if (ret == AVERROR(EAGAIN))
       continue;
@@ -195,10 +198,10 @@ int main() {
   pthread_create(&thread, NULL, capture_thread, input_ctx);
 
   SDL_Event e;
-  while (running) {
+  while (is_running()) {
     while (SDL_PollEvent(&e)) {
       if (e.type == SDL_QUIT) {
-        running = 0;
+        atomic_store(&running, 0);
         av_read_pause(input_ctx);
       }
     }
