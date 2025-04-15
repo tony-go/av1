@@ -105,8 +105,6 @@ void *capture_thread(void *raw_args) {
   enc_ctx->pkt_timebase = enc_ctx->time_base;
   enc_ctx->gop_size = 1;
   AVDictionary *encoder_opts = NULL;
-  // av_dict_set(&encoder_opts, "preset", "8", 0);
-  // av_dict_set(&encoder_opts, "crf", "40", 0);
   av_dict_set(&encoder_opts, "preset", "ultrafast", 0);
   av_dict_set(&encoder_opts, "tune", "zerolatency", 0);
   ret = avcodec_open2(enc_ctx, enc, &encoder_opts);
