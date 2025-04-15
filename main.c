@@ -6,6 +6,8 @@
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
 #include <pthread.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <sys/_pthread/_pthread_cond_t.h>
 #include <sys/_pthread/_pthread_mutex_t.h>
@@ -16,7 +18,15 @@
 #define FPS 30
 #define FRAME_QUEUE_SIZE 8
 
-volatile int running = 1;
+atomic_int running = 1;
+
+int is_running() { return atomic_load(&running) == 1; }
+
+typedef struct {
+  AVFormatContext *input_ctx;
+  int video_stream_index;
+  bool is_avi;
+} Args;
 
 typedef struct {
   AVPacket *packets[FRAME_QUEUE_SIZE];
@@ -35,10 +45,10 @@ FrameQueue queue = {.head = 0,
 
 void push_packet(AVPacket *packet) {
   pthread_mutex_lock(&queue.mutex);
-  while (queue.count == FRAME_QUEUE_SIZE && running)
+  while (queue.count == FRAME_QUEUE_SIZE && is_running())
     pthread_cond_wait(&queue.cond, &queue.mutex);
 
-  if (!running) {
+  if (!is_running()) {
     pthread_mutex_unlock(&queue.mutex);
     return;
   }
@@ -53,10 +63,10 @@ void push_packet(AVPacket *packet) {
 
 AVPacket *pop_packet(void) {
   pthread_mutex_lock(&queue.mutex);
-  while (queue.count == 0 && running)
+  while (queue.count == 0 && is_running())
     pthread_cond_wait(&queue.cond, &queue.mutex);
 
-  if (!running) {
+  if (!is_running()) {
     pthread_mutex_unlock(&queue.mutex);
     return NULL;
   }
@@ -70,12 +80,15 @@ AVPacket *pop_packet(void) {
   return packet;
 }
 
-void *capture_thread(void *arg) {
-  AVFormatContext *input_ctx = (AVFormatContext *)arg;
-  int video_stream_index =
-      av_find_best_stream(input_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+void *capture_thread(void *raw_args) {
+  int ret;
+  if (raw_args == NULL) {
+    fprintf(stderr, "Error: NULL argument passed to capture_thread\n");
+    return NULL;
+  }
+  Args *args = (Args *)raw_args;
   AVCodecParameters *in_params =
-      input_ctx->streams[video_stream_index]->codecpar;
+      args->input_ctx->streams[args->video_stream_index]->codecpar;
 
   // === Decode raw camera packets ===
   const AVCodec *raw_decoder = avcodec_find_decoder(in_params->codec_id);
@@ -84,7 +97,8 @@ void *capture_thread(void *arg) {
   avcodec_open2(raw_dec_ctx, raw_decoder, NULL);
 
   // === AV1 encoder ===
-  const AVCodec *enc = avcodec_find_encoder_by_name("libsvtav1");
+  const AVCodec *enc =
+      avcodec_find_encoder_by_name(args->is_avi ? "libsvtav1" : "libx264");
   AVCodecContext *enc_ctx = avcodec_alloc_context3(enc);
   enc_ctx->width = WIDTH;
   enc_ctx->height = HEIGHT;
@@ -94,9 +108,15 @@ void *capture_thread(void *arg) {
   enc_ctx->pkt_timebase = enc_ctx->time_base;
   enc_ctx->gop_size = 1;
   AVDictionary *encoder_opts = NULL;
-  av_dict_set(&encoder_opts, "preset", "8", 0);
-  av_dict_set(&encoder_opts, "crf", "40", 0);
-  assert(avcodec_open2(enc_ctx, enc, &encoder_opts) == 0);
+  if (args->is_avi) {
+    av_dict_set(&encoder_opts, "preset", "10", 0);
+    av_dict_set(&encoder_opts, "crf", "30", 0);
+  } else {
+    av_dict_set(&encoder_opts, "preset", "ultrafast", 0);
+    av_dict_set(&encoder_opts, "tune", "zerolatency", 0);
+  }
+  ret = avcodec_open2(enc_ctx, enc, &encoder_opts);
+  assert(ret == 0);
 
   // === Swscale contexts ===
   struct SwsContext *to_yuv =
@@ -113,14 +133,14 @@ void *capture_thread(void *arg) {
   av_frame_get_buffer(yuv, 32);
 
   int i = 0;
-  while (running) {
-    int ret = av_read_frame(input_ctx, pkt);
+  while (is_running()) {
+    int ret = av_read_frame(args->input_ctx, pkt);
     if (ret == AVERROR(EAGAIN))
       continue;
     else if (ret < 0)
       break;
 
-    if (pkt->stream_index != video_stream_index) {
+    if (pkt->stream_index != args->video_stream_index) {
       av_packet_unref(pkt);
       continue;
     }
@@ -147,28 +167,44 @@ void *capture_thread(void *arg) {
   sws_freeContext(to_yuv);
   avcodec_free_context(&raw_dec_ctx);
   avcodec_free_context(&enc_ctx);
-  avformat_close_input(&input_ctx);
   return NULL;
 }
 
-int main() {
+int main(int argc, char **argv) {
+  bool is_avi = false;
+  if (argc == 2) {
+    if (strcmp(argv[1], "--av1") == 0) {
+      is_avi = true;
+    }
+  }
+
+  if (is_avi)
+    printf("av1 mode\n");
+
+  int ret;
   avdevice_register_all();
   SDL_Init(SDL_INIT_VIDEO);
 
-  // === Capture from AVFoundation ===
   AVFormatContext *input_ctx = NULL;
   const AVInputFormat *input_fmt = av_find_input_format("avfoundation");
+  if (input_fmt == NULL) {
+    printf("av_find_input_format did not worked\n");
+    return 1;
+  }
+
   AVDictionary *options = NULL;
   av_dict_set(&options, "framerate", "30", 0);
   av_dict_set(&options, "video_size", "1280x720", 0);
   av_dict_set(&options, "pixel_format", "uyvy422", 0);
-  assert(avformat_open_input(&input_ctx, "0", input_fmt, &options) == 0);
-  assert(avformat_find_stream_info(input_ctx, NULL) >= 0);
+  ret = avformat_open_input(&input_ctx, "0", input_fmt, &options);
+  assert(ret == 0);
+
+  ret = avformat_find_stream_info(input_ctx, NULL);
+  assert(ret >= 0);
 
   // === SDL setup ===
-  SDL_Window *win =
-      SDL_CreateWindow("AV1 Live Loopback", SDL_WINDOWPOS_CENTERED,
-                       SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, 0);
+  SDL_Window *win = SDL_CreateWindow("Live Loopback", SDL_WINDOWPOS_CENTERED,
+                                     SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, 0);
   SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
   SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB24,
                                        SDL_TEXTUREACCESS_TARGET, WIDTH, HEIGHT);
@@ -184,19 +220,33 @@ int main() {
   av_frame_get_buffer(rgb, 32);
 
   // === AV1 decoder ===
-  const AVCodec *dec = avcodec_find_decoder_by_name("libdav1d");
+  const AVCodec *dec =
+      avcodec_find_decoder_by_name(is_avi ? "libdav1d" : "h264");
   AVCodecContext *dec_ctx = avcodec_alloc_context3(dec);
   dec_ctx->gop_size = 1;
-  assert(avcodec_open2(dec_ctx, dec, NULL) == 0);
+  ret = avcodec_open2(dec_ctx, dec, NULL);
+  assert(ret == 0);
+
+  int video_stream_index =
+      av_find_best_stream(input_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+  printf("video_stream_index %i\n", video_stream_index);
+  if (video_stream_index < 0) {
+    printf("Best stream not found ...\n");
+    exit(1);
+  }
+
+  Args args = {.input_ctx = input_ctx,
+               .video_stream_index = video_stream_index,
+               .is_avi = is_avi};
 
   pthread_t thread;
-  pthread_create(&thread, NULL, capture_thread, input_ctx);
+  pthread_create(&thread, NULL, capture_thread, &args);
 
   SDL_Event e;
-  while (running) {
+  while (is_running()) {
     while (SDL_PollEvent(&e)) {
       if (e.type == SDL_QUIT) {
-        running = 0;
+        atomic_store(&running, 0);
         av_read_pause(input_ctx);
       }
     }
@@ -224,6 +274,7 @@ int main() {
   pthread_join(thread, NULL);
 
   av_frame_free(&rgb);
+  avformat_free_context(input_ctx);
   sws_freeContext(to_rgb);
   SDL_DestroyTexture(tex);
   SDL_DestroyRenderer(ren);
