@@ -7,6 +7,7 @@
 #include <libswscale/swscale.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <sys/_pthread/_pthread_cond_t.h>
 #include <sys/_pthread/_pthread_mutex_t.h>
@@ -24,6 +25,7 @@ int is_running() { return atomic_load(&running) == 1; }
 typedef struct {
   AVFormatContext *input_ctx;
   int video_stream_index;
+  bool is_avi;
 } Args;
 
 typedef struct {
@@ -95,7 +97,8 @@ void *capture_thread(void *raw_args) {
   avcodec_open2(raw_dec_ctx, raw_decoder, NULL);
 
   // === AV1 encoder ===
-  const AVCodec *enc = avcodec_find_encoder_by_name("libx264");
+  const AVCodec *enc =
+      avcodec_find_encoder_by_name(args->is_avi ? "libsvtav1" : "libx264");
   AVCodecContext *enc_ctx = avcodec_alloc_context3(enc);
   enc_ctx->width = WIDTH;
   enc_ctx->height = HEIGHT;
@@ -105,8 +108,13 @@ void *capture_thread(void *raw_args) {
   enc_ctx->pkt_timebase = enc_ctx->time_base;
   enc_ctx->gop_size = 1;
   AVDictionary *encoder_opts = NULL;
-  av_dict_set(&encoder_opts, "preset", "ultrafast", 0);
-  av_dict_set(&encoder_opts, "tune", "zerolatency", 0);
+  if (args->is_avi) {
+    av_dict_set(&encoder_opts, "preset", "10", 0);
+    av_dict_set(&encoder_opts, "crf", "30", 0);
+  } else {
+    av_dict_set(&encoder_opts, "preset", "ultrafast", 0);
+    av_dict_set(&encoder_opts, "tune", "zerolatency", 0);
+  }
   ret = avcodec_open2(enc_ctx, enc, &encoder_opts);
   assert(ret == 0);
 
@@ -162,7 +170,17 @@ void *capture_thread(void *raw_args) {
   return NULL;
 }
 
-int main() {
+int main(int argc, char **argv) {
+  bool is_avi = false;
+  if (argc == 2) {
+    if (strcmp(argv[1], "--av1") == 0) {
+      is_avi = true;
+    }
+  }
+
+  if (is_avi)
+    printf("av1 mode\n");
+
   int ret;
   avdevice_register_all();
   SDL_Init(SDL_INIT_VIDEO);
@@ -185,9 +203,8 @@ int main() {
   assert(ret >= 0);
 
   // === SDL setup ===
-  SDL_Window *win =
-      SDL_CreateWindow("AV1 Live Loopback", SDL_WINDOWPOS_CENTERED,
-                       SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, 0);
+  SDL_Window *win = SDL_CreateWindow("Live Loopback", SDL_WINDOWPOS_CENTERED,
+                                     SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, 0);
   SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
   SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB24,
                                        SDL_TEXTUREACCESS_TARGET, WIDTH, HEIGHT);
@@ -203,7 +220,8 @@ int main() {
   av_frame_get_buffer(rgb, 32);
 
   // === AV1 decoder ===
-  const AVCodec *dec = avcodec_find_decoder_by_name("h264");
+  const AVCodec *dec =
+      avcodec_find_decoder_by_name(is_avi ? "libdav1d" : "h264");
   AVCodecContext *dec_ctx = avcodec_alloc_context3(dec);
   dec_ctx->gop_size = 1;
   ret = avcodec_open2(dec_ctx, dec, NULL);
@@ -218,7 +236,8 @@ int main() {
   }
 
   Args args = {.input_ctx = input_ctx,
-               .video_stream_index = video_stream_index};
+               .video_stream_index = video_stream_index,
+               .is_avi = is_avi};
 
   pthread_t thread;
   pthread_create(&thread, NULL, capture_thread, &args);
