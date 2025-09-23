@@ -14,3 +14,17 @@ target_link_libraries(capture PRIVATE
   swscale
   sdl2
 )
+
+add_executable(audio_capture audio.c)
+
+target_include_directories(audio_capture PRIVATE /opt/homebrew/include)
+target_link_directories(audio_capture PRIVATE /opt/homebrew/lib)
+target_link_libraries(audio_capture PRIVATE
+  avdevice
+  avformat
+  avcodec
+  avutil
+  swresample
+  swscale
+  sdl2
+)
