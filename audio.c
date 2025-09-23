@@ -48,5 +48,41 @@ int main(int argc, char **argv) {
   err = avcodec_open2(input_codec_ctx, input_codec, NULL);
   assert(err >= 0);
 
+  printf("Input codec settled!\n");
+
+  // Setup OPUS encoder
+
+  const AVCodec *opus_encoder = avcodec_find_encoder(AV_CODEC_ID_OPUS);
+  assert(opus_encoder);
+
+  AVCodecContext *opus_encoder_ctx = avcodec_alloc_context3(opus_encoder);
+  assert(opus_encoder_ctx);
+  opus_encoder_ctx->sample_rate = 48000;
+  opus_encoder_ctx->bit_rate = 128000;
+  opus_encoder_ctx->sample_fmt = AV_SAMPLE_FMT_FLT;
+  av_channel_layout_default(&opus_encoder_ctx->ch_layout, 2);
+
+  err = avcodec_open2(opus_encoder_ctx, opus_encoder, NULL);
+  assert(err >= 0);
+
+  printf("Opus encoder settled!\n");
+
+  // Setup OPUS decoder
+
+  const AVCodec *opus_decoder = avcodec_find_decoder(AV_CODEC_ID_OPUS);
+  assert(opus_decoder);
+
+  AVCodecContext *opus_decoder_ctx = avcodec_alloc_context3(opus_decoder);
+  assert(opus_decoder_ctx);
+  opus_decoder_ctx->sample_rate = 48000;
+  opus_decoder_ctx->bit_rate = 128000;
+  opus_decoder_ctx->sample_fmt = AV_SAMPLE_FMT_FLT;
+  av_channel_layout_default(&opus_decoder_ctx->ch_layout, 2);
+
+  err = avcodec_open2(opus_decoder_ctx, opus_decoder, NULL);
+  assert(err >= 0);
+
+  printf("Opus decoder settled!\n");
+
   return 0;
 }
